@@ -17,7 +17,7 @@ q群: 193588519
 
 - 找到 ChatGPT Team Helper，点「详细信息」拉到最底下，把「在 InPrivate 中允许」开关打开
 
-- 使用隐私模式打开浏览器，用gamil子邮箱登录 https:// chatgpt.com 
+- 使用隐私模式打开浏览器，用gamil子邮箱登录 https://chatgpt.com 
 - 例如: link+1@gmail.com(邮箱名+任意字符串)，子邮箱超过5个会注册失败
 
 - 点击加入全部 ，自动加入team，全部加入后点击 下载全部JSON
