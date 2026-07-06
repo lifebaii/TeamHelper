@@ -8,6 +8,17 @@
     "https://chatgpt.com/*",
     "https://*.chatgpt.com/*"
   ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "team-ids.json"
+      ],
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://*.chatgpt.com/*"
+      ]
+    }
+  ],
   "content_scripts": [
     {
       "matches": [

@@ -1,20 +1,5 @@
 (() => {
-  const DEFAULT_TEAM_IDS = [
-    "ff598c4d-ccaf-40c1-bfaa-cb94565764b1",
-    "47336c9d-7607-4478-b37c-018049af1e46",
-    "59208eb6-ec43-4d87-9289-dbd9e250bdd6",
-    "2c82c020-e1bc-4363-9502-a6794405f793",
-    "9901799e-e832-48b1-9278-9abe73168708",
-    "cf8e512d-1f3b-4603-950c-3d9758a8b435",
-    "444437a7-c08b-423e-a2c8-65c17383ba24",
-    "c72dcdb4-63a0-40b7-b0bb-ccce3ca54984",
-    "2b636e76-a87b-4222-b536-2dc4a545109f",
-    "4779b1d7-3109-4ecb-957f-80262f4d7161",
-    "ae67aa09-f3d3-4895-977d-9ca44ed1d996",
-    "6daa08c1-59c8-4e06-9bc8-9d7246a63057",
-    "521ffc8f-9612-4950-84ed-95773138eca6"
-  ];
-
+  const DEFAULT_TEAM_IDS_FILE = "team-ids.json";
   const DB_NAME = "chatgpt-team-helper";
   const DB_VERSION = 1;
   const STORE_TEAMS = "teams";
@@ -22,6 +7,7 @@
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
   let dbPromise;
+  let defaultTeamIdsPromise;
   let currentOwner = null;
   let rows = [];
   let panel;
@@ -77,6 +63,27 @@
     const userPart = user ? `${user.email || user.name || user.id}` : "未登录";
     const accountPart = account ? `当前 account: ${account.id}` : "未检测到 account";
     return `${userPart} | ${accountPart}`;
+  }
+
+  function uniqueTeamIds(values) {
+    if (!Array.isArray(values)) return [];
+    return Array.from(new Set(values.map((item) => String(item).trim()).filter((item) => UUID_RE.test(item))));
+  }
+
+  async function loadDefaultTeamIds() {
+    if (defaultTeamIdsPromise) return defaultTeamIdsPromise;
+    defaultTeamIdsPromise = (async () => {
+      try {
+        const fileUrl = chrome.runtime.getURL(DEFAULT_TEAM_IDS_FILE);
+        const response = await fetch(fileUrl);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return uniqueTeamIds(await response.json());
+      } catch (error) {
+        console.warn(`ChatGPT Team Helper: 默认 Team ID 文件读取失败: ${error && error.message ? error.message : String(error)}`);
+        return [];
+      }
+    })();
+    return defaultTeamIdsPromise;
   }
 
   async function getSession() {
@@ -142,9 +149,10 @@
     const seeded = await getMeta(seededKey);
     if (seeded && seeded.value) return;
 
+    const defaultTeamIds = await loadDefaultTeamIds();
     const existing = await loadRows(ownerKey);
     const existingIds = new Set(existing.map((row) => row.teamId));
-    for (const teamId of DEFAULT_TEAM_IDS) {
+    for (const teamId of defaultTeamIds) {
       if (existingIds.has(teamId)) continue;
       await saveRow({
         ownerKey,
@@ -633,12 +641,18 @@
     const joinedRows = rows.filter(isJoinedRow);
     if (!joinedRows.length) return;
 
-    const entries = joinedRows.map((row) => ({
-      name: `chatgpt-session-${row.teamId}.json`,
-      content: JSON.stringify(row.lastSession, null, 2)
-    }));
+    const entries = joinedRows.flatMap((row) => ([
+      {
+        name: `session/chatgpt-session-${row.teamId}.json`,
+        content: JSON.stringify(row.lastSession, null, 2)
+      },
+      {
+        name: `cpa/chatgpt-cpa-${row.teamId}.json`,
+        content: JSON.stringify(convertSessionToCpa(row.lastSession), null, 2)
+      }
+    ]));
     const zip = makeZip(entries);
-    downloadBlob(zip, `chatgpt-sessions-${timestampToken()}.zip`);
+    downloadBlob(zip, `chatgpt-team-exports-${timestampToken()}.zip`);
   }
 
   function downloadJson(value, fileName) {

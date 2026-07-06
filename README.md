@@ -6,7 +6,7 @@
 
 - 本地运行：不依赖后端服务，下载文件只在本机生成。
 
-- 批量导出： session JSON，并自动打包成 ZIP。
+- 批量导出：session 和 CPA JSON，并按 `session/`、`cpa/` 两个目录自动打包成 ZIP。
 
 ## 使用说明
 
