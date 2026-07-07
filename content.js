@@ -5,6 +5,8 @@
   const STORE_TEAMS = "teams";
   const STORE_META = "meta";
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const JOIN_ALL_DELAY_MIN_MS = 8000;
+  const JOIN_ALL_DELAY_MAX_MS = 10000;
 
   let dbPromise;
   let defaultTeamIdsPromise;
@@ -17,6 +19,7 @@
   let joinAllBtn;
   let downloadAllBtn;
   let joinAllActive = false;
+  let joinAllTimer = null;
 
   function openDb() {
     if (dbPromise) return dbPromise;
@@ -130,6 +133,21 @@
     return `pending-join-all:${ownerKey}`;
   }
 
+  function randomJoinAllDelayMs() {
+    return JOIN_ALL_DELAY_MIN_MS + Math.floor(Math.random() * (JOIN_ALL_DELAY_MAX_MS - JOIN_ALL_DELAY_MIN_MS + 1));
+  }
+
+  function clearJoinAllTimer() {
+    if (!joinAllTimer) return;
+    clearTimeout(joinAllTimer);
+    joinAllTimer = null;
+  }
+
+  function shouldPauseJoinAll(error) {
+    const message = error && error.message ? error.message : String(error || "");
+    return /status=(401|403|429)|session status=(401|403|429)|accessToken|验证码|验证|captcha|challenge|Cloudflare|登录|log[-\s]?in|掉线/i.test(message);
+  }
+
   function isJoinedRow(row) {
     return Boolean(row && row.statusType === "ok" && row.lastSession);
   }
@@ -138,6 +156,7 @@
     if (joinAllBtn) {
       joinAllBtn.disabled = joinAllActive || !rows.some((row) => !isJoinedRow(row));
       joinAllBtn.textContent = joinAllActive ? "加入中..." : "加入全部";
+      joinAllBtn.title = "加入全部会串行执行，每个 Team 之间随机等待 8-10 秒";
     }
     if (downloadAllBtn) {
       downloadAllBtn.disabled = !rows.some(isJoinedRow);
@@ -264,8 +283,9 @@
       const primaryActions = createEl("div", "cth-action-line");
       const downloadActions = createEl("div", "cth-action-line");
       const switchBtn = createButton("切换", "cth-button", () => switchTeam(row.teamId));
-      switchBtn.disabled = !isJoinedRow(row);
+      switchBtn.disabled = joinAllActive || !isJoinedRow(row);
       const joinBtn = createButton("加入", "cth-button cth-primary", () => joinTeam(row.teamId));
+      joinBtn.disabled = joinAllActive;
       const downloadBtn = createButton("下载 session", "cth-button", () => downloadSession(row));
       downloadBtn.disabled = !row.lastSession;
       const downloadCpaBtn = createButton("下载 CPA", "cth-button", () => downloadCpa(row));
@@ -274,6 +294,7 @@
         await deleteRow(row);
         await refreshRows();
       });
+      removeBtn.disabled = joinAllActive;
       primaryActions.append(switchBtn, joinBtn, removeBtn);
       downloadActions.append(downloadBtn, downloadCpaBtn);
       actions.append(primaryActions, downloadActions);
@@ -383,6 +404,7 @@
         lastMessage: error && error.message ? error.message : String(error)
       });
       if (options.mode === "join-all") {
+        await recordJoinAllError(teamId, error, shouldPauseJoinAll(error));
         await continueJoinAll();
       }
     }
@@ -417,14 +439,33 @@
 
     const nextState = {
       ...state,
-      active: true,
+      active: switched,
       currentTeamId: null,
       completedTeamIds: Array.from(completedTeamIds),
       failedTeamIds: Array.from(failedTeamIds),
+      nextRunAt: switched ? Date.now() + randomJoinAllDelayMs() : 0,
+      lastError: switched ? "" : "未切换到目标 Team，已暂停",
       updatedAt: Date.now()
     };
     await setMeta(joinAllMetaKey(ownerKey), nextState);
     return nextState;
+  }
+
+  async function recordJoinAllError(teamId, error, pause) {
+    const record = await getMeta(joinAllMetaKey());
+    const state = record && record.value;
+    if (!state) return;
+    const failedTeamIds = new Set(state.failedTeamIds || []);
+    failedTeamIds.add(teamId);
+    await setMeta(joinAllMetaKey(), {
+      ...state,
+      active: !pause,
+      currentTeamId: null,
+      failedTeamIds: Array.from(failedTeamIds),
+      nextRunAt: pause ? 0 : Date.now() + randomJoinAllDelayMs(),
+      lastError: error && error.message ? error.message : String(error),
+      updatedAt: Date.now()
+    });
   }
 
   async function startJoinAll() {
@@ -436,7 +477,9 @@
       startedAt: Date.now(),
       processedTeamIds: [],
       completedTeamIds: [],
-      failedTeamIds: []
+      failedTeamIds: [],
+      nextRunAt: 0,
+      lastError: ""
     });
     await continueJoinAll();
   }
@@ -446,7 +489,21 @@
     const state = record && record.value;
     joinAllActive = Boolean(state && state.active);
     if (!joinAllActive) {
+      clearJoinAllTimer();
       updateBulkButtons();
+      return;
+    }
+
+    const nextRunAt = Number(state.nextRunAt || 0);
+    if (nextRunAt > Date.now()) {
+      clearJoinAllTimer();
+      const waitMs = nextRunAt - Date.now();
+      joinAllTimer = setTimeout(() => {
+        joinAllTimer = null;
+        void continueJoinAll();
+      }, waitMs);
+      updateBulkButtons();
+      if (joinAllBtn) joinAllBtn.textContent = `等待 ${Math.ceil(waitMs / 1000)}s...`;
       return;
     }
 
@@ -467,6 +524,7 @@
       active: true,
       currentTeamId: nextRow.teamId,
       processedTeamIds: Array.from(processedTeamIds),
+      nextRunAt: 0,
       updatedAt: Date.now()
     });
     renderRows();
@@ -477,7 +535,7 @@
     const metaKey = `pending-switch:${ownerKey}`;
     const pending = await getMeta(metaKey);
     const value = pending && pending.value;
-    if (!value || !value.teamId) return;
+    if (!value || !value.teamId) return false;
 
     const switched = session && session.account && session.account.id === value.teamId;
     const isSwitchOnly = value.mode === "switch";
@@ -492,8 +550,14 @@
 
     if (value.mode === "join-all") {
       await recordJoinAllResult(ownerKey, value.teamId, switched);
-      await continueJoinAll();
+      if (switched) {
+        await continueJoinAll();
+      } else {
+        joinAllActive = false;
+        renderRows();
+      }
     }
+    return true;
   }
 
   function downloadBlob(blob, fileName) {
@@ -950,7 +1014,10 @@
       const joinAllRecord = await getMeta(joinAllMetaKey(currentOwner));
       joinAllActive = Boolean(joinAllRecord && joinAllRecord.value && joinAllRecord.value.active);
       renderRows();
-      await finalizePendingSwitch(currentOwner, session);
+      const finalized = await finalizePendingSwitch(currentOwner, session);
+      const latestJoinAllRecord = await getMeta(joinAllMetaKey(currentOwner));
+      joinAllActive = Boolean(latestJoinAllRecord && latestJoinAllRecord.value && latestJoinAllRecord.value.active);
+      if (joinAllActive && !finalized) await continueJoinAll();
     } catch (error) {
       accountEl.textContent = `读取 session 失败：${error && error.message ? error.message : String(error)}`;
       accountEl.classList.add("cth-error");

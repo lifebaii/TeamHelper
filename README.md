@@ -20,7 +20,7 @@ q群: 193588519
 - 使用隐私模式打开浏览器，用gamil子邮箱登录 https://chatgpt.com 
 - 例如: link+1@gmail.com(邮箱名+任意字符串)，子邮箱超过5个会注册失败
 
-- 点击加入全部 ，自动加入team，全部加入后点击 下载全部JSON
+- 点击加入全部，插件会串行自动加入 team，每个 team 之间随机等待 8-10 秒；全部加入后点击 下载全部JSON
 
 ![Edge extension settings](docs/images/edge-extension-settings.png)
 
